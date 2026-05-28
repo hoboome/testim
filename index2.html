@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR Treasure Hunt — Версия 2</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:-apple-system,BlinkMacSystemFont,sans-serif;overflow:hidden;touch-action:none}
+#root{position:relative;width:100vw;height:100vh;overflow:hidden;background:#000}
+#video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none}
+#canvas{position:absolute;inset:0;width:100%;height:100%}
+#hud{position:absolute;top:14px;left:10px;right:10px;display:flex;justify-content:space-between;pointer-events:none}
+.hc{background:rgba(0,0,0,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:.5px solid rgba(255,255,255,.15);border-radius:12px;padding:5px 13px;color:#fff;text-align:center}
+.hv{font-size:21px;font-weight:600;line-height:1.2}
+.hl{font-size:10px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.05em}
+#tbar{position:absolute;bottom:0;left:0;height:3px;background:#1D9E75;transition:width .95s linear,background .4s}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:rgba(0,0,0,.88);padding:28px;text-align:center;z-index:20;backdrop-filter:blur(4px)}
+.screen h2{color:#fff;font-size:24px;font-weight:600}
+.screen p{color:rgba(255,255,255,.6);font-size:14px;line-height:1.7;max-width:290px}
+.pips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.pip{font-size:26px;background:rgba(255,255,255,.08);border-radius:10px;padding:9px}
+.btn{background:#1D9E75;color:#fff;border:none;border-radius:26px;padding:13px 38px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 18px rgba(29,158,117,.35)}
+.btn:active{transform:scale(.97)}
+.btn2{background:transparent;color:rgba(255,255,255,.65);border:.5px solid rgba(255,255,255,.22);border-radius:26px;padding:10px 30px;font-size:14px;cursor:pointer}
+#big-score{font-size:42px;font-weight:700;color:#1D9E75}
+.flash{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%);font-size:42px;animation:fl .85s forwards;pointer-events:none;z-index:30}
+@keyframes fl{0%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-85%) scale(1.7)}}
+#hint{position:absolute;bottom:22px;left:0;right:0;text-align:center;color:rgba(255,255,255,.45);font-size:12px;pointer-events:none}
+#version-badge{position:absolute;top:70px;left:50%;transform:translateX(-50%);background:rgba(255,165,0,.2);border:1px solid rgba(255,165,0,.4);border-radius:20px;padding:4px 14px;color:rgba(255,165,0,.9);font-size:11px;pointer-events:none;white-space:nowrap}
+#s-nocam{display:none}
+</style>
+</head>
+<body>
+<div id="root">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <div class="hc"><div class="hl">очки</div><div class="hv" id="h-score">0</div></div>
+    <div class="hc"><div class="hl">найдено</div><div class="hv" id="h-found">0/8</div></div>
+    <div class="hc"><div class="hl">время</div><div class="hv" id="h-time">60</div></div>
+  </div>
+  <div id="version-badge">📋 Версия 2 — камера есть, объекты «плывут»</div>
+  <div id="hint">Касайся предметов чтобы собрать</div>
+  <div id="tbar" style="width:100%"></div>
+
+  <!-- СТАРТ -->
+  <div class="screen" id="s-start">
+    <div style="font-size:52px">🗺️</div>
+    <h2>AR Treasure Hunt</h2>
+    <p style="color:rgba(255,165,0,.8);font-size:13px">⚠️ Версия 2 — камера подключена.<br>Объекты поверх видео, но «приклеены» к экрану — при повороте телефона они смещаются вместе с картинкой.</p>
+    <div class="pips">
+      <div class="pip">💎</div><div class="pip">⭐</div><div class="pip">🏺</div>
+      <div class="pip">🔮</div><div class="pip">🪙</div><div class="pip">📿</div>
+    </div>
+    <button class="btn" id="btn-cam">📷 Играть с камерой</button>
+    <button class="btn2" id="btn-demo">Демо без камеры</button>
+  </div>
+
+  <!-- НЕТ КАМЕРЫ -->
+  <div class="screen" id="s-nocam">
+    <div style="font-size:48px">📵</div>
+    <h2 style="color:#fff">Камера недоступна</h2>
+    <p>Разреши доступ или сыграй в демо.</p>
+    <button class="btn" id="btn-demo2">Демо-режим</button>
+  </div>
+
+  <!-- ПОБЕДА -->
+  <div class="screen" id="s-win" style="display:none">
+    <div style="font-size:52px" id="w-emoji">🏆</div>
+    <h2 id="w-title">Победа!</h2>
+    <div id="big-score"></div>
+    <p id="w-stats"></p>
+    <button class="btn" id="btn-again">🔄 Играть снова</button>
+  </div>
+</div>
+
+<script>
+const TOTAL    = 8;
+const DURATION = 60;
+
+const TYPES = [
+  {emoji:'💎', pts:50, color:'#60c8ff'},
+  {emoji:'⭐', pts:30, color:'#ffd060'},
+  {emoji:'🏺', pts:20, color:'#d4915a'},
+  {emoji:'🔮', pts:40, color:'#b388ff'},
+  {emoji:'🪙', pts:15, color:'#ffe082'},
+  {emoji:'📿', pts:35, color:'#80cbc4'},
+];
+
+let items=[], running=false, score=0, found=0, timeLeft=DURATION;
+let animId=null, timerInt=null;
+
+const video  = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+const root   = document.getElementById('root');
+
+function resize(){ canvas.width=root.clientWidth; canvas.height=root.clientHeight; }
+resize(); window.addEventListener('resize', resize);
+
+// ── ПРОБЛЕМНАЯ ВЕРСИЯ: «сырые» углы Эйлера ──────────────
+// Объекты хранят базовую позицию на экране (screenX, screenY)
+// При повороте телефона применяется простое смещение через gamma/beta
+// Это вызывает дрейф и gimbal lock
+
+let rawGamma = 0; // лево/право
+let rawBeta  = 0; // вперёд/назад
+let betaRef  = 0, gammaRef = 0; // начальные значения
+
+window.addEventListener('deviceorientation', (e) => {
+  if(!running) return;
+  const gamma = e.gamma || 0;
+  const beta  = e.beta  || 0;
+
+  // Прямое использование углов вызывало дрейф и gimbal lock
+  const dx = ((gamma - gammaRef) / 90) * canvas.width  * 0.8;
+  const dy = ((beta  - betaRef ) / 90) * canvas.height * 0.8;
+
+  // Объекты «плывут» — смещаются вместе с наклоном телефона
+  items.forEach(obj => {
+    obj.screenX = obj.baseX - dx; // объект «плыл» при наклоне
+    obj.screenY = obj.baseY - dy;
+  });
+}, true);
+
+function spawn(){
+  items=[];
+  const W=canvas.width, H=canvas.height;
+  // Запоминаем начальные углы
+  betaRef=rawBeta; gammaRef=rawGamma;
+  for(let i=0;i<TOTAL;i++){
+    const t=TYPES[Math.floor(Math.random()*TYPES.length)];
+    const bx = 70 + Math.random()*(W-140);
+    const by = 110 + Math.random()*(H-220);
+    items.push({
+      ...t,
+      baseX:bx, baseY:by,   // базовая позиция
+      screenX:bx, screenY:by, // текущая позиция на экране
+      phase: Math.random()*Math.PI*2,
+      done:false, id:i
+    });
+  }
+}
+
+function loop(ts){
+  if(!running) return;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  items.forEach(it=>{
+    if(it.done) return;
+    const bob = Math.sin(ts*0.001 + it.phase) * 5;
+    const sx = it.screenX;
+    const sy = it.screenY + bob;
+
+    // Круг с цветом (простая графика, без сферы)
+    ctx.save();
+    ctx.globalAlpha = 0.82;
+    ctx.beginPath(); ctx.arc(sx,sy,38,0,Math.PI*2);
+    ctx.fillStyle = it.color; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=2; ctx.stroke();
+    ctx.globalAlpha=1;
+
+    // Эмодзи
+    ctx.font='26px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(it.emoji, sx, sy+2);
+
+    // Очки
+    ctx.font='12px -apple-system,sans-serif';
+    ctx.fillStyle='#fff'; ctx.globalAlpha=0.7;
+    ctx.fillText('+'+it.pts, sx, sy-50);
+    ctx.restore();
+  });
+  animId=requestAnimationFrame(loop);
+}
+
+// Касание для сбора
+function onTap(x,y){
+  if(!running) return;
+  items.forEach(it=>{
+    if(it.done) return;
+    if(Math.hypot(it.screenX-x, it.screenY-y)<42) collect(it);
+  });
+}
+canvas.addEventListener('click',  e=>onTap(e.clientX, e.clientY));
+canvas.addEventListener('touchend', e=>{
+  e.preventDefault();
+  onTap(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+},{passive:false});
+
+function collect(it){
+  if(it.done) return;
+  it.done=true;
+  score+=it.pts; found++;
+  document.getElementById('h-score').textContent=score;
+  document.getElementById('h-found').textContent=found+'/'+TOTAL;
+  const f=document.createElement('div');
+  f.className='flash'; f.textContent=it.emoji;
+  root.appendChild(f); setTimeout(()=>f.remove(),900);
+  if(found>=TOTAL) endGame(true);
+}
+
+function startTimer(){
+  const bar=document.getElementById('tbar');
+  timerInt=setInterval(()=>{
+    if(!running) return;
+    timeLeft--;
+    document.getElementById('h-time').textContent=timeLeft;
+    bar.style.width=Math.round(timeLeft/DURATION*100)+'%';
+    if(timeLeft<=10) bar.style.background='#E24B4A';
+    if(timeLeft<=0) endGame(false);
+  },1000);
+}
+
+function endGame(win){
+  running=false;
+  cancelAnimationFrame(animId); clearInterval(timerInt);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  document.getElementById('w-emoji').textContent=win?'🏆':'⏰';
+  document.getElementById('w-title').textContent=win?'Победа!':'Время вышло!';
+  document.getElementById('big-score').textContent=score+' очков';
+  document.getElementById('w-stats').textContent=win
+    ?'Все '+TOTAL+' найдены! Остаток: '+timeLeft+'с'
+    :'Найдено '+found+' из '+TOTAL;
+  document.getElementById('s-win').style.display='flex';
+}
+
+function launchGame(){
+  ['s-start','s-win','s-nocam'].forEach(id=>document.getElementById(id).style.display='none');
+  items=[]; found=0; score=0; timeLeft=DURATION; running=false;
+  document.getElementById('h-score').textContent='0';
+  document.getElementById('h-found').textContent='0/'+TOTAL;
+  document.getElementById('h-time').textContent=DURATION;
+  document.getElementById('tbar').style.width='100%';
+  document.getElementById('tbar').style.background='#1D9E75';
+  resize(); spawn();
+  running=true;
+  requestAnimationFrame(loop);
+  startTimer();
+}
+
+async function startWithCamera(){
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    video.srcObject=stream; video.style.display='block';
+    document.getElementById('hint').textContent='Касайся предметов чтобы собрать';
+  }catch(e){
+    document.getElementById('s-start').style.display='none';
+    document.getElementById('s-nocam').style.display='flex';
+    return;
+  }
+  launchGame();
+}
+
+function startDemo(){
+  if(video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop());
+  video.srcObject=null; video.style.display='none';
+  root.style.background='linear-gradient(135deg,#1a1a2e,#16213e,#0f3460)';
+  launchGame();
+}
+
+document.getElementById('btn-cam').onclick   = ()=>startWithCamera();
+document.getElementById('btn-demo').onclick  = ()=>startDemo();
+document.getElementById('btn-demo2').onclick = ()=>startDemo();
+document.getElementById('btn-again').onclick = ()=>{
+  if(video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop());
+  video.srcObject=null; video.style.display='none';
+  root.style.background='#000';
+  document.getElementById('s-win').style.display='none';
+  document.getElementById('s-start').style.display='flex';
+};
+</script>
+</body>
+</html>
