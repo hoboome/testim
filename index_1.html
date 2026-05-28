@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR Treasure Hunt 🗺️</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:#111;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden}
+#game-root{position:relative;width:100vw;height:100vh;overflow:hidden}
+#video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#canvas-ar{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#ui-overlay{position:absolute;inset:0;pointer-events:none}
+#hud{position:absolute;top:16px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:flex-start}
+.hud-card{background:rgba(0,0,0,0.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:.5px solid rgba(255,255,255,.18);border-radius:12px;padding:6px 14px;color:#fff}
+.hud-val{font-size:22px;font-weight:600;line-height:1.2}
+.hud-label{font-size:11px;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.05em}
+#crosshair-wrap{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;pointer-events:none}
+#crosshair-svg{width:70px;height:70px;transition:transform .15s}
+#tap-zone{position:absolute;inset:0}
+#hint{position:absolute;bottom:20px;left:12px;right:12px;text-align:center;color:rgba(255,255,255,.5);font-size:13px;pointer-events:none}
+#screen-start,#screen-win,#screen-no-cam{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:rgba(0,0,0,.85);padding:28px;text-align:center;z-index:10;backdrop-filter:blur(4px)}
+.screen-emoji{font-size:56px;line-height:1}
+.screen-title{color:#fff;font-size:26px;font-weight:600}
+.screen-sub{color:rgba(255,255,255,.6);font-size:15px;line-height:1.7;max-width:300px}
+.items-preview{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:4px 0}
+.item-pip{font-size:28px;background:rgba(255,255,255,.08);border-radius:12px;padding:10px}
+.btn-primary{background:#1D9E75;color:#fff;border:none;border-radius:28px;padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 4px 20px rgba(29,158,117,.35);transition:background .15s,transform .1s}
+.btn-primary:active{transform:scale(.97)}
+.btn-secondary{background:transparent;color:rgba(255,255,255,.7);border:.5px solid rgba(255,255,255,.25);border-radius:28px;padding:11px 32px;font-size:15px;cursor:pointer}
+#score-final{font-size:44px;font-weight:700;color:#1D9E75}
+#timer-bar{position:absolute;bottom:0;left:0;height:3px;background:#1D9E75;transition:width .9s linear,background .5s}
+.collected-flash{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);font-size:40px;animation:flash .9s forwards;pointer-events:none;z-index:20}
+@keyframes flash{0%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{opacity:0;transform:translate(-50%,-80%) scale(1.8)}}
+#radar{position:absolute;bottom:70px;right:14px;width:70px;height:70px;border-radius:50%;background:rgba(0,0,0,.55);border:.5px solid rgba(255,255,255,.2);overflow:hidden}
+.radar-dot{position:absolute;width:7px;height:7px;border-radius:50%;transform:translate(-50%,-50%)}
+#radar-sweep{position:absolute;width:50%;height:50%;top:50%;left:50%;transform-origin:0% 100%;background:rgba(29,158,117,.22);animation:sweep 3s linear infinite}
+@keyframes sweep{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.demo-bg{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)!important}
+#lock-ring{transition:stroke-dashoffset .05s linear}
+</style>
+</head>
+<body>
+<div id="game-root">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas-ar"></canvas>
+
+  <div id="screen-start">
+    <div class="screen-emoji">🗺️</div>
+    <div class="screen-title">AR Treasure Hunt</div>
+    <p class="screen-sub">Наводи прицел на сокровища — они стоят в 3D пространстве. Держи прицел на предмете чтобы собрать!</p>
+    <div class="items-preview">
+      <div class="item-pip">💎</div><div class="item-pip">⭐</div><div class="item-pip">🏺</div>
+      <div class="item-pip">🔮</div><div class="item-pip">🪙</div><div class="item-pip">📿</div>
+    </div>
+    <button class="btn-primary" id="btn-start">🎮 Начать игру</button>
+    <button class="btn-secondary" id="btn-demo-start">Демо без камеры</button>
+  </div>
+
+  <div id="screen-no-cam" style="display:none">
+    <div class="screen-emoji">📵</div>
+    <div class="screen-title" style="color:#fff">Камера недоступна</div>
+    <p class="screen-sub">Разреши доступ к камере или сыграй в демо-режиме.</p>
+    <button class="btn-primary" id="btn-demo">Демо-режим</button>
+    <button class="btn-secondary" id="btn-retry">Попробовать снова</button>
+  </div>
+
+  <div id="screen-win" style="display:none">
+    <div class="screen-emoji" id="win-emoji">🏆</div>
+    <div class="screen-title" id="win-title">Победа!</div>
+    <div id="score-final"></div>
+    <p class="screen-sub" id="win-stats"></p>
+    <button class="btn-primary" id="btn-restart">🔄 Играть снова</button>
+  </div>
+
+  <div id="ui-overlay">
+    <div id="hud">
+      <div class="hud-card"><div class="hud-label">очки</div><div class="hud-val" id="hud-score">0</div></div>
+      <div class="hud-card" style="text-align:center"><div class="hud-label">найдено</div><div class="hud-val" id="hud-found">0/8</div></div>
+      <div class="hud-card" style="text-align:right"><div class="hud-label">время</div><div class="hud-val" id="hud-timer">60</div></div>
+    </div>
+
+    <!-- Прицел -->
+    <div id="crosshair-wrap">
+      <svg id="crosshair-svg" viewBox="0 0 70 70" xmlns="http://www.w3.org/2000/svg">
+        <!-- Уголки прицела -->
+        <g stroke="white" stroke-width="2.5" fill="none" opacity="0.85">
+          <path d="M10,22 L10,10 L22,10"/>
+          <path d="M48,10 L60,10 L60,22"/>
+          <path d="M10,48 L10,60 L22,60"/>
+          <path d="M48,60 L60,60 L60,48"/>
+        </g>
+        <!-- Центральная точка -->
+        <circle cx="35" cy="35" r="2.5" fill="white" opacity="0.9"/>
+        <!-- Прогресс-кольцо захвата -->
+        <circle id="lock-ring" cx="35" cy="35" r="14"
+          stroke="#1D9E75" stroke-width="3" fill="none"
+          stroke-linecap="round"
+          stroke-dasharray="88"
+          stroke-dashoffset="88"
+          transform="rotate(-90 35 35)"
+          opacity="0"/>
+      </svg>
+    </div>
+
+    <div id="tap-zone"></div>
+
+    <div id="radar">
+      <div id="radar-sweep"></div>
+    </div>
+    <div id="hint">Наводи прицел на сферу и удерживай</div>
+    <div id="timer-bar" style="width:100%"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  КОНФИГ
+// ═══════════════════════════════════════════════════════
+const ITEMS_TOTAL   = 8;
+const GAME_DURATION = 60;
+const LOCK_TIME     = 800;   // мс удержания прицела для сбора
+const FOV_H         = 60;    // горизонтальный угол обзора камеры (градусы)
+const SPHERE_RADIUS = 38;    // px базовый размер сферы
+const WORLD_SPREAD  = 110;   // разброс объектов по углам (градусы по горизонтали)
+
+const ITEM_TYPES = [
+  { emoji:'💎', pts:50, c1:'#a8edff', c2:'#0090cc', c3:'#005a8c' },
+  { emoji:'⭐', pts:30, c1:'#fff5a0', c2:'#f5a623', c3:'#b87000' },
+  { emoji:'🏺', pts:20, c1:'#ffd4a8', c2:'#c06020', c3:'#7a3a0a' },
+  { emoji:'🔮', pts:40, c1:'#e8d0ff', c2:'#9040e0', c3:'#4a1080' },
+  { emoji:'🪙', pts:15, c1:'#fff8c0', c2:'#d4a000', c3:'#8a6000' },
+  { emoji:'📿', pts:35, c1:'#c0ffe8', c2:'#20c080', c3:'#007040' },
+];
+
+// ═══════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════
+let state = { running:false, score:0, found:0, timeLeft:GAME_DURATION, items:[] };
+let animId=null, timerInterval=null;
+
+// Ориентация устройства (углы в градусах)
+let yaw=0, pitch=0;          // текущие
+let yawRef=0, pitchRef=0;    // опорные при старте
+
+// Демо: перетаскивание
+let demoYaw=0, demoPitch=0;
+let dragStart=null;
+
+// Захват прицелом
+let lockTarget=null, lockStart=0;
+
+// ═══════════════════════════════════════════════════════
+//  DOM
+// ═══════════════════════════════════════════════════════
+const video    = document.getElementById('video');
+const canvas   = document.getElementById('canvas-ar');
+const ctx      = canvas.getContext('2d');
+const root     = document.getElementById('game-root');
+const lockRing = document.getElementById('lock-ring');
+const lockRingCircumference = 88; // 2π×14
+
+function resizeCanvas(){
+  canvas.width  = root.offsetWidth;
+  canvas.height = root.offsetHeight;
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ═══════════════════════════════════════════════════════
+//  СПАВН — объекты в угловых координатах
+// ═══════════════════════════════════════════════════════
+function spawnItems(){
+  state.items=[];
+  for(let i=0;i<ITEMS_TOTAL;i++){
+    const t = ITEM_TYPES[Math.floor(Math.random()*ITEM_TYPES.length)];
+    state.items.push({
+      ...t,
+      // угол по горизонтали и вертикали от центра (в градусах)
+      angleH: (Math.random()-0.5) * WORLD_SPREAD,
+      angleV: (Math.random()-0.5) * 40,
+      phase:  Math.random()*Math.PI*2,
+      collected: false,
+      id: i,
+    });
+  }
+  updateRadar();
+}
+
+// ═══════════════════════════════════════════════════════
+//  ГИРОСКОП
+// ═══════════════════════════════════════════════════════
+let gyroReady = false;
+
+function initGyro(){
+  const handler = (e) => {
+    if(!e.alpha && !e.beta && !e.gamma) return;
+    // gamma = поворот вокруг Z (влево-вправо), beta = наклон вперёд
+    yaw   = (e.gamma || 0);
+    pitch = (e.beta  || 0);
+    gyroReady = true;
+  };
+
+  if(typeof DeviceOrientationEvent !== 'undefined' &&
+     typeof DeviceOrientationEvent.requestPermission === 'function'){
+    DeviceOrientationEvent.requestPermission()
+      .then(r=>{ if(r==='granted'){ window.addEventListener('deviceorientation',handler); }})
+      .catch(()=>{});
+  } else {
+    window.addEventListener('deviceorientation', handler);
+  }
+}
+
+function getRelYaw(){   return gyroReady ? yaw   - yawRef   : demoYaw; }
+function getRelPitch(){ return gyroReady ? pitch - pitchRef : demoPitch; }
+
+// ═══════════════════════════════════════════════════════
+//  ПРОЕКЦИЯ: угол → экранные координаты
+// ═══════════════════════════════════════════════════════
+function project(angleH, angleV){
+  const W = canvas.width, H = canvas.height;
+  const fovV = FOV_H * (H / W);
+
+  // Угол относительно текущего взгляда камеры
+  const dh = angleH - getRelYaw();
+  const dv = angleV - getRelPitch();
+
+  // Пиксели на градус
+  const pxPerDegH = W / FOV_H;
+  const pxPerDegV = H / fovV;
+
+  return {
+    x: W/2 + dh * pxPerDegH,
+    y: H/2 + dv * pxPerDegV,
+  };
+}
+
+// ═══════════════════════════════════════════════════════
+//  РИСОВАЛКА СФЕРЫ
+// ═══════════════════════════════════════════════════════
+function drawSphere(sx, sy, r, c1, c2, c3, emoji, alpha){
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Тень
+  const shadow = ctx.createRadialGradient(sx+r*0.2, sy+r*1.1, r*0.1, sx+r*0.1, sy+r*1.0, r*0.8);
+  shadow.addColorStop(0,'rgba(0,0,0,0.35)');
+  shadow.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle = shadow;
+  ctx.beginPath();
+  ctx.ellipse(sx, sy+r*0.9, r*0.8, r*0.25, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // Основное тело сферы
+  const grad = ctx.createRadialGradient(sx-r*0.3, sy-r*0.3, r*0.05, sx, sy, r);
+  grad.addColorStop(0,   c1);
+  grad.addColorStop(0.5, c2);
+  grad.addColorStop(1,   c3);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI*2);
+  ctx.fill();
+
+  // Блик (speular highlight)
+  const shine = ctx.createRadialGradient(sx-r*0.32, sy-r*0.32, 0, sx-r*0.2, sy-r*0.2, r*0.55);
+  shine.addColorStop(0,   'rgba(255,255,255,0.82)');
+  shine.addColorStop(0.4, 'rgba(255,255,255,0.18)');
+  shine.addColorStop(1,   'rgba(255,255,255,0)');
+  ctx.fillStyle = shine;
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI*2);
+  ctx.fill();
+
+  // Обводка
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI*2);
+  ctx.stroke();
+
+  // Эмодзи внутри сферы
+  ctx.globalAlpha = alpha * 0.92;
+  ctx.font = Math.round(r*0.95)+'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, sx, sy+r*0.06);
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+//  ИГРОВОЙ ЦИКЛ
+// ═══════════════════════════════════════════════════════
+function gameLoop(ts){
+  if(!state.running) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2;
+  let nearestOnScreen = null, nearestDist = Infinity;
+
+  // Рисуем сферы
+  state.items.forEach(item=>{
+    if(item.collected) return;
+    const p = project(item.angleH, item.angleV);
+
+    // Лёгкое покачивание (не двигает позицию, только сферу)
+    const bobY = Math.sin(ts*0.0008 + item.phase) * 4;
+    const sx = p.x, sy = p.y + bobY;
+
+    // Расстояние от прицела
+    const dist = Math.hypot(sx - cx, sy - cy);
+
+    // Плавное исчезание за краем + перспективный размер
+    const margin = 120;
+    const edgeFade = Math.min(1,
+      Math.min(sx+margin, W-sx+margin, sy+margin, H-sy+margin) / margin
+    );
+    if(edgeFade <= 0) return;
+
+    // Размер с лёгкой перспективой (объекты по краям чуть меньше)
+    const perspScale = 1 - Math.abs(item.angleH)/180;
+    const r = SPHERE_RADIUS * perspScale;
+
+    drawSphere(sx, sy, r, item.c1, item.c2, item.c3, item.emoji, edgeFade);
+
+    // Стрелка если объект за экраном
+    if(edgeFade < 0.3){
+      drawArrow(sx, sy, cx, cy, item.c2);
+    }
+
+    // Очки рядом
+    if(dist < 100){
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - dist/100) * edgeFade;
+      ctx.font = '13px -apple-system,sans-serif';
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.fillText('+'+item.pts, sx, sy - r - 10);
+      ctx.restore();
+    }
+
+    if(dist < nearestDist && edgeFade > 0.1){
+      nearestDist = dist;
+      nearestOnScreen = { item, sx, sy, dist, r };
+    }
+  });
+
+  // Прицел — логика захвата
+  const hitRadius = nearestOnScreen ? nearestOnScreen.r + 12 : 0;
+  const onTarget  = nearestOnScreen && nearestOnScreen.dist < hitRadius;
+
+  if(onTarget){
+    if(lockTarget !== nearestOnScreen.item){
+      lockTarget = nearestOnScreen.item;
+      lockStart  = ts;
+    }
+    const progress = Math.min(1, (ts - lockStart) / LOCK_TIME);
+    const offset   = lockRingCircumference * (1 - progress);
+    lockRing.style.strokeDashoffset = offset;
+    lockRing.style.opacity = '1';
+
+    // Пульс прицела когда почти захвачен
+    const scale = 1 + progress * 0.15;
+    document.getElementById('crosshair-svg').style.transform = `scale(${scale})`;
+
+    if(progress >= 1) collectItem(nearestOnScreen.item);
+  } else {
+    lockTarget = null;
+    lockRing.style.strokeDashoffset = lockRingCircumference;
+    lockRing.style.opacity = '0';
+    document.getElementById('crosshair-svg').style.transform = 'scale(1)';
+  }
+
+  animId = requestAnimationFrame(gameLoop);
+}
+
+// ═══════════════════════════════════════════════════════
+//  СТРЕЛКА К ОБЪЕКТУ ЗА ЭКРАНОМ
+// ═══════════════════════════════════════════════════════
+function drawArrow(tx, ty, cx, cy, color){
+  const angle = Math.atan2(ty-cy, tx-cx);
+  const dist  = Math.min(canvas.width, canvas.height)/2 - 48;
+  const ax = cx + Math.cos(angle)*dist;
+  const ay = cy + Math.sin(angle)*dist;
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.rotate(angle);
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(16,0); ctx.lineTo(-8,9); ctx.lineTo(-4,0); ctx.lineTo(-8,-9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════
+//  СБОР
+// ═══════════════════════════════════════════════════════
+function collectItem(item){
+  if(item.collected) return;
+  item.collected = true;
+  lockTarget = null;
+  state.score += item.pts;
+  state.found++;
+  document.getElementById('hud-score').textContent = state.score;
+  document.getElementById('hud-found').textContent = state.found+'/'+ITEMS_TOTAL;
+  const flash = document.createElement('div');
+  flash.className = 'collected-flash';
+  flash.textContent = item.emoji;
+  document.getElementById('ui-overlay').appendChild(flash);
+  setTimeout(()=>flash.remove(), 950);
+  updateRadar();
+  if(state.found >= ITEMS_TOTAL) endGame(true);
+}
+
+// ═══════════════════════════════════════════════════════
+//  РАДАР
+// ═══════════════════════════════════════════════════════
+function updateRadar(){
+  const radar = document.getElementById('radar');
+  radar.querySelectorAll('.radar-dot').forEach(e=>e.remove());
+  state.items.forEach(item=>{
+    if(item.collected) return;
+    const rx = 50 + (item.angleH / WORLD_SPREAD)*50;
+    const ry = 50 + (item.angleV / 40)*50;
+    const dot = document.createElement('div');
+    dot.className='radar-dot';
+    dot.style.cssText=`left:${rx}%;top:${ry}%;background:${item.c2}`;
+    radar.appendChild(dot);
+  });
+  // Центр радара = взгляд игрока
+  const c = document.createElement('div');
+  c.style.cssText='position:absolute;left:50%;top:50%;width:6px;height:6px;border-radius:50%;background:#1D9E75;transform:translate(-50%,-50%);z-index:3';
+  radar.appendChild(c);
+}
+
+// ═══════════════════════════════════════════════════════
+//  ТАЙМЕР
+// ═══════════════════════════════════════════════════════
+function startTimer(){
+  const bar = document.getElementById('timer-bar');
+  timerInterval = setInterval(()=>{
+    if(!state.running) return;
+    state.timeLeft--;
+    document.getElementById('hud-timer').textContent = state.timeLeft;
+    bar.style.width = Math.round(state.timeLeft/GAME_DURATION*100)+'%';
+    if(state.timeLeft<=10) bar.style.background='#E24B4A';
+    if(state.timeLeft<=0) endGame(false);
+  }, 1000);
+}
+
+// ═══════════════════════════════════════════════════════
+//  КОНЕЦ ИГРЫ
+// ═══════════════════════════════════════════════════════
+function endGame(win){
+  state.running=false;
+  cancelAnimationFrame(animId);
+  clearInterval(timerInterval);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  document.getElementById('win-emoji').textContent  = win?'🏆':'⏰';
+  document.getElementById('win-title').textContent  = win?'Победа!':'Время вышло!';
+  document.getElementById('score-final').textContent = state.score+' очков';
+  document.getElementById('win-stats').textContent  = win
+    ? 'Все '+ITEMS_TOTAL+' сокровища найдены! Остаток: '+state.timeLeft+'с'
+    : 'Найдено '+state.found+' из '+ITEMS_TOTAL+'. Попробуй ещё раз!';
+  document.getElementById('screen-win').style.display='flex';
+}
+
+// ═══════════════════════════════════════════════════════
+//  СТАРТ
+// ═══════════════════════════════════════════════════════
+async function startGame(demo=false){
+  cancelAnimationFrame(animId);
+  clearInterval(timerInterval);
+  lockTarget=null;
+  demoYaw=0; demoPitch=0; dragStart=null;
+
+  state={ running:false, score:0, found:0, timeLeft:GAME_DURATION, items:[] };
+  ['screen-start','screen-win','screen-no-cam'].forEach(id=>document.getElementById(id).style.display='none');
+  document.getElementById('hud-score').textContent='0';
+  document.getElementById('hud-found').textContent='0/'+ITEMS_TOTAL;
+  document.getElementById('hud-timer').textContent=GAME_DURATION;
+  document.getElementById('timer-bar').style.width='100%';
+  document.getElementById('timer-bar').style.background='#1D9E75';
+  resizeCanvas();
+
+  if(!demo){
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+      video.srcObject=stream; video.style.display='block';
+      root.style.background='';
+      // Запоминаем стартовые углы
+      await new Promise(r=>setTimeout(r,400));
+      yawRef=yaw; pitchRef=pitch;
+      initGyro();
+    }catch(e){
+      video.style.display='none';
+      document.getElementById('screen-no-cam').style.display='flex';
+      return;
+    }
+  }else{
+    if(video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop());
+    video.srcObject=null; video.style.display='none';
+    root.style.background='linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)';
+    initDemoControls();
+  }
+
+  spawnItems();
+  state.running=true;
+  requestAnimationFrame(gameLoop);
+  startTimer();
+}
+
+// ═══════════════════════════════════════════════════════
+//  ДЕМО-УПРАВЛЕНИЕ (перетаскивание = поворот камеры)
+// ═══════════════════════════════════════════════════════
+function initDemoControls(){
+  const tap = document.getElementById('tap-zone');
+  function onDown(x,y){ dragStart={x,y,yaw:demoYaw,pitch:demoPitch}; }
+  function onMove(x,y){
+    if(!dragStart) return;
+    demoYaw   = dragStart.yaw   - (x-dragStart.x)*0.12;
+    demoPitch = dragStart.pitch - (y-dragStart.y)*0.12;
+    demoYaw   = Math.max(-WORLD_SPREAD/2, Math.min(WORLD_SPREAD/2, demoYaw));
+    demoPitch = Math.max(-25, Math.min(25, demoPitch));
+  }
+  function onUp(){ dragStart=null; }
+  tap.addEventListener('touchstart', e=>{ onDown(e.touches[0].clientX,e.touches[0].clientY); },{passive:true});
+  tap.addEventListener('touchmove',  e=>{ onMove(e.touches[0].clientX,e.touches[0].clientY); },{passive:true});
+  tap.addEventListener('touchend',   onUp,{passive:true});
+  tap.addEventListener('mousedown',  e=>onDown(e.clientX,e.clientY));
+  tap.addEventListener('mousemove',  e=>onMove(e.clientX,e.clientY));
+  tap.addEventListener('mouseup',    onUp);
+}
+
+// ═══════════════════════════════════════════════════════
+//  КНОПКИ
+// ═══════════════════════════════════════════════════════
+document.getElementById('btn-start').addEventListener('click',      ()=>startGame(false));
+document.getElementById('btn-demo-start').addEventListener('click', ()=>startGame(true));
+document.getElementById('btn-demo').addEventListener('click',       ()=>startGame(true));
+document.getElementById('btn-retry').addEventListener('click',      ()=>startGame(false));
+document.getElementById('btn-restart').addEventListener('click',()=>{
+  if(video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop());
+  video.srcObject=null;
+  root.style.background='';
+  document.getElementById('screen-win').style.display='none';
+  document.getElementById('screen-start').style.display='flex';
+});
+</script>
+</body>
+</html>
